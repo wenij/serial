@@ -38,7 +38,7 @@ func New() SerialPort {
 	}
 }
 
-func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err error) {
+func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) error {
 
 	if !sp.portIsOpen {
 
@@ -48,10 +48,10 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err
 			readTimeout = timeout[0]
 		}
 
-		comPort, e := openPort(name, baud, readTimeout)
-		if e != nil {
+		comPort, err := openPort(name, baud, readTimeout)
+		if err != nil {
 			// Open port failed
-			err = fmt.Errorf("Unable to open port \"%s\" - %s", name, e)
+			return fmt.Errorf("Unable to open port \"%s\" - %s", name, err)
 		} else {
 			// Open port succesfull
 			sp.name = name
@@ -67,9 +67,9 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err
 			go sp.processSerialPort()
 		}
 	} else {
-		err = fmt.Errorf("\"%s\" is already open", name)
+		return fmt.Errorf("\"%s\" is already open", name)
 	}
-	return
+	return nil
 }
 
 // This method close the current Serial Port.
@@ -211,7 +211,6 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 				line, err := sp.ReadLine()
 				if err != nil {
 					// EOF wait tof fill buffer
-					time.Sleep(time.Millisecond * 10)
 				} else {
 					result = regExpPatttern.FindAllString(line, -1)
 					if len(result) > 0 {
@@ -228,8 +227,8 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 			return data, nil
 		case <-time.After(timeout):
 			timeExpired = true
-			return "", fmt.Errorf("Timeout expired")
 			sp.log("INF", "Unable to match RegExp:\r\n\t%s\r\n", exp)
+			return "", fmt.Errorf("Timeout expired")
 		}
 	} else {
 		return "", fmt.Errorf("Serial port is not open")
@@ -258,7 +257,9 @@ func (sp *SerialPort) readSerialPort() {
 		// Write data to serial buffer
 		sp.buff.Write(rxBuff[:n])
 		for _, b := range rxBuff[:n] {
-			sp.rxChar <- b
+			if sp.portIsOpen {
+				sp.rxChar <- b
+			}
 		}
 	}
 }
@@ -266,17 +267,21 @@ func (sp *SerialPort) readSerialPort() {
 func (sp *SerialPort) processSerialPort() {
 	screenBuff := make([]byte, 0)
 	var lastRxByte byte
-	for sp.portIsOpen {
-		lastRxByte = <-sp.rxChar
-		// Print received lines
-		switch lastRxByte {
-		case sp.eol:
-			// EOL - Print received data
-			sp.log("Rx", string(append(screenBuff, lastRxByte)))
-			screenBuff = make([]byte, 0) //Clean buffer
+	for {
+		if sp.portIsOpen {
+			lastRxByte = <-sp.rxChar
+			// Print received lines
+			switch lastRxByte {
+			case sp.eol:
+				// EOL - Print received data
+				sp.log("Rx", string(append(screenBuff, lastRxByte)))
+				screenBuff = make([]byte, 0) //Clean buffer
+				break
+			default:
+				screenBuff = append(screenBuff, lastRxByte)
+			}
+		} else {
 			break
-		default:
-			screenBuff = append(screenBuff, lastRxByte)
 		}
 	}
 }
