@@ -90,11 +90,6 @@ type Config struct {
 	// CRLFTranslate bool
 }
 
-// OpenPort opens a serial port with the specified configuration
-func OpenPort(c *Config) (*Port, error) {
-	return openPort(c.Name, c.Baud, c.ReadTimeout)
-}
-
 // Converts the timeout values for Linux / POSIX systems
 func posixTimeoutValues(readTimeout time.Duration) (vmin uint8, vtime uint8) {
 	const MAXUINT8 = 1<<8 - 1 // 255
