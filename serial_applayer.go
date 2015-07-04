@@ -1,28 +1,16 @@
-// Serialport package
-//
-// Author: Hugo Arganda
-// Email: harganda@moreycorp.com
-// Date: 07/01/2015
-// 
-// Copyright (C) 2013 The Morey Corporation
-// 
-// All rights reserved.  This file is the intellectual property of
-// The Morey Corporation; it may not be copied, duplicated or
-// transferred to a third party without prior written permission.
-
 package serial
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"time"
-	"bytes"
-	"regexp"
 	"io/ioutil"
+	"regexp"
+	"time"
 )
 
 // Interval time to check if close port has been requested
-const READ_TIMEOUT time.Duration = time.Millisecond * 100  
+const READ_TIMEOUT time.Duration = time.Millisecond * 100
 
 // End of line character (AKA EOL), newline character (ASCII 10, CR, '\n'). is used by default.
 const EOL_DEFAULT byte = '\n'
@@ -32,17 +20,15 @@ const EOL_DEFAULT byte = '\n'
 *******************************************************************************************/
 
 type SerialPort struct {
-	port io.ReadWriteCloser
-	name string
-	baud int
-	portIsOpen bool
-	rxChar chan byte
-	rxLine chan string
-	rxLineFlag bool
+	port          io.ReadWriteCloser
+	name          string
+	baud          int
+	portIsOpen    bool
+	rxChar        chan byte
 	closeReqChann chan bool
 	closeAckChann chan error
-	eol byte
-	buff *bytes.Buffer
+	eol           byte
+	buff          *bytes.Buffer
 }
 
 /*******************************************************************************************
@@ -50,7 +36,7 @@ type SerialPort struct {
 *******************************************************************************************/
 
 func New() SerialPort {
-	return SerialPort {
+	return SerialPort{
 		eol: EOL_DEFAULT,
 	}
 }
@@ -59,7 +45,7 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err
 
 	if !sp.portIsOpen {
 
-		var readTimeout time.Duration 
+		var readTimeout time.Duration
 
 		if len(timeout) > 0 {
 			readTimeout = timeout[0]
@@ -79,9 +65,6 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err
 			sp.buff.Reset()
 			// Open channels
 			sp.rxChar = make(chan byte)
-			sp.rxLine = make(chan string)
-			sp.closeReqChann = make(chan bool)
-			sp.closeAckChann = make(chan error)
 			// Enable threads
 			go sp.readSerialPort()
 			go sp.processSerialPort()
@@ -93,25 +76,19 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) (err
 }
 
 // This method close the current Serial Port.
-func (sp *SerialPort) Close() (err error) {
+func (sp *SerialPort) Close() error {
 	if sp.portIsOpen {
-		sp.closeReqChann <- true
-		err = <- sp.closeAckChann
-		if err != nil {
-			// Do nothing
-		} else {
-			sp.portIsOpen = false
-			close(sp.rxChar)
-			close(sp.rxLine)
-		}
+		sp.portIsOpen = false
+		close(sp.rxChar)
+		return sp.port.Close()
 	}
-	return
+	return nil
 }
 
 // This method prints data trough the serial port.
 func (sp *SerialPort) Write(data []byte) (n int, err error) {
 	if sp.portIsOpen {
-		n , err = sp.port.Write(data)
+		n, err = sp.port.Write(data)
 		if err != nil {
 			// Do nothing
 		} else {
@@ -126,7 +103,7 @@ func (sp *SerialPort) Write(data []byte) (n int, err error) {
 // This method prints data trough the serial port.
 func (sp *SerialPort) Print(str string) error {
 	if sp.portIsOpen {
-		_ , err := sp.port.Write([]byte(str))
+		_, err := sp.port.Write([]byte(str))
 		if err != nil {
 			return err
 		} else {
@@ -138,7 +115,7 @@ func (sp *SerialPort) Print(str string) error {
 	return nil
 }
 
-// Prints data to the serial port as human-readable ASCII text followed by a carriage return character 
+// Prints data to the serial port as human-readable ASCII text followed by a carriage return character
 // (ASCII 13, CR, '\r') and a newline character (ASCII 10, LF, '\n').
 func (sp *SerialPort) Println(str string) error {
 	return sp.Print(str + "\r\n")
@@ -161,13 +138,13 @@ func (sp *SerialPort) SendFile(filepath string) error {
 	data := []byte{}
 	// Read file
 	file, err := ioutil.ReadFile(filepath)
-	if err != nil {	
-		sp.log("DBG", "Invalid filepath" )
+	if err != nil {
+		sp.log("DBG", "Invalid filepath")
 		return err
 	} else {
 		fileSize := len(file)
-		sp.log("INF", "File size is %d bytes", fileSize )
-		
+		sp.log("INF", "File size is %d bytes", fileSize)
+
 		for sentBytes <= fileSize {
 			//Try sending slices of less or equal than 512 bytes at time
 			if len(file[sentBytes:]) > q {
@@ -178,7 +155,7 @@ func (sp *SerialPort) SendFile(filepath string) error {
 			// Write binaries
 			_, err := sp.port.Write(data)
 			if err != nil {
-				sp.log("DBG", "Error while sending the file" )
+				sp.log("DBG", "Error while sending the file")
 				return err
 			} else {
 				sentBytes += q
@@ -201,9 +178,9 @@ func (sp *SerialPort) Read() (byte, error) {
 }
 
 // Read first available line from serial port buffer.
-// 
+//
 // Line is delimited by the EOL character, newline character (ASCII 10, LF, '\n') is used by default.
-// 
+//
 // The text returned from ReadLine does not include the line end ("\r\n" or '\n').
 func (sp *SerialPort) ReadLine() (string, error) {
 	if sp.portIsOpen {
@@ -225,7 +202,7 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 	if sp.portIsOpen {
 		//Decode received data
 		timeExpired := false
-	  	
+
 		regExpPatttern := regexp.MustCompile(exp)
 
 		//Timeout structure
@@ -248,18 +225,18 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 			}
 		}()
 		select {
-			case data := <-c1:
-				format := "The RegExp: \r\n\t\t%s\r\n\tHas been matched: \r\n\t\t%s\r\n"
-				sp.log("INF", format, exp, data)
-				return data, nil
-			case <-time.After(timeout):
-				timeExpired = true
-				return "", fmt.Errorf("Timeout expired")
-				sp.log("INF", "Unable to match RegExp:\r\n\t%s\r\n", exp)
+		case data := <-c1:
+			format := "The RegExp: \r\n\t\t%s\r\n\tHas been matched: \r\n\t\t%s\r\n"
+			sp.log("INF", format, exp, data)
+			return data, nil
+		case <-time.After(timeout):
+			timeExpired = true
+			return "", fmt.Errorf("Timeout expired")
+			sp.log("INF", "Unable to match RegExp:\r\n\t%s\r\n", exp)
 		}
 	} else {
 		return "", fmt.Errorf("Serial port is not open")
-	} 
+	}
 	return "", nil
 }
 
@@ -286,12 +263,6 @@ func (sp *SerialPort) readSerialPort() {
 		for _, b := range rxBuff[:n] {
 			sp.rxChar <- b
 		}
-		select {
-			case <- sp.closeReqChann:
-				sp.closeAckChann <- sp.port.Close()
-				return
-			default:
-		}
 	}
 }
 
@@ -302,13 +273,13 @@ func (sp *SerialPort) processSerialPort() {
 		lastRxByte = <-sp.rxChar
 		// Print received lines
 		switch lastRxByte {
-			case sp.eol:
-				// EOL - Print received data
-				sp.log("Rx", string(append(screenBuff, lastRxByte)))
-				screenBuff = make([]byte, 0) //Clean buffer
-				break
-			default:
-				screenBuff = append(screenBuff, lastRxByte)
+		case sp.eol:
+			// EOL - Print received data
+			sp.log("Rx", string(append(screenBuff, lastRxByte)))
+			screenBuff = make([]byte, 0) //Clean buffer
+			break
+		default:
+			screenBuff = append(screenBuff, lastRxByte)
 		}
 	}
 }
@@ -317,7 +288,7 @@ func (sp *SerialPort) log(dir, data string, extras ...interface{}) {
 	spacer := "-"
 	if dir == "Tx" {
 		spacer = ">>"
-	} else {	
+	} else {
 		if dir == "Rx" {
 			spacer = "<<"
 		}
@@ -334,19 +305,13 @@ func removeEOL(line string) string {
 	// Remove CR byte "\r"
 	for _, b := range []byte(line) {
 		switch b {
-			case '\r':
-				// Do nothing
-			case '\n':
-				// Do nothing
-			default:
-				data = append(data, b)
+		case '\r':
+			// Do nothing
+		case '\n':
+			// Do nothing
+		default:
+			data = append(data, b)
 		}
 	}
 	return string(data)
 }
-
-// REVISION LOG:
-// mm/dd/yyyy | Author     			| Description
-// ---------------------------------------
-// 07/01/2015 | Hugo Arganda 		| First draft
-// 07/02/2015 | Hugo Arganda 		| Printf method added
