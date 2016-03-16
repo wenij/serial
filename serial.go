@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
+	"os"
 	"regexp"
 	"time"
 )
@@ -20,55 +22,63 @@ type SerialPort struct {
 	port          io.ReadWriteCloser
 	name          string
 	baud          int
-	portIsOpen    bool
+	eol           uint8
 	rxChar        chan byte
 	closeReqChann chan bool
 	closeAckChann chan error
-	eol           byte
 	buff          *bytes.Buffer
+	logger        *log.Logger
+	portIsOpen    bool
+	Verbose       bool
+	// openPort      func(port string, baud int) (io.ReadWriteCloser, error)
 }
 
 /*******************************************************************************************
 ********************************   BASIC FUNCTIONS  ****************************************
 *******************************************************************************************/
 
-func New() SerialPort {
-	return SerialPort{
-		eol: EOL_DEFAULT,
+func New() *SerialPort {
+	// Create new file
+	file, err := os.OpenFile(fmt.Sprintf("log_serial_%d.txt", time.Now().Unix()), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalln("Failed to open log file", ":", err)
+	}
+	multi := io.MultiWriter(file, os.Stdout)
+	return &SerialPort{
+		logger:  log.New(multi, "PREFIX: ", log.Ldate|log.Ltime),
+		eol:     EOL_DEFAULT,
+		buff:    bytes.NewBuffer(make([]uint8, 256)),
+		Verbose: true,
 	}
 }
 
 func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) error {
-
-	if !sp.portIsOpen {
-
-		var readTimeout time.Duration
-
-		if len(timeout) > 0 {
-			readTimeout = timeout[0]
-		}
-
-		comPort, err := openPort(name, baud, readTimeout)
-		if err != nil {
-			// Open port failed
-			return fmt.Errorf("Unable to open port \"%s\" - %s", name, err)
-		} else {
-			// Open port succesfull
-			sp.name = name
-			sp.baud = baud
-			sp.port = comPort
-			sp.portIsOpen = true
-			sp.buff = bytes.NewBuffer(make([]byte, 256))
-			sp.buff.Reset()
-			// Open channels
-			sp.rxChar = make(chan byte)
-			// Enable threads
-			go sp.readSerialPort()
-			go sp.processSerialPort()
-		}
-	} else {
+	// Check if port is open
+	if sp.portIsOpen {
 		return fmt.Errorf("\"%s\" is already open", name)
 	}
+	var readTimeout time.Duration
+	if len(timeout) > 0 {
+		readTimeout = timeout[0]
+	}
+	// Open serial port
+	comPort, err := openPort(name, baud, readTimeout)
+	if err != nil {
+		return fmt.Errorf("Unable to open port \"%s\" - %s", name, err)
+	}
+	// Open port succesfull
+	sp.name = name
+	sp.baud = baud
+	sp.port = comPort
+	sp.portIsOpen = true
+	sp.buff.Reset()
+	// Open channels
+	sp.rxChar = make(chan byte)
+	// Enable threads
+	go sp.readSerialPort()
+	go sp.processSerialPort()
+	sp.logger.SetPrefix(fmt.Sprintf("[%s] ", sp.name))
+	sp.log("Serial port %s@%d open", sp.name, sp.baud)
 	return nil
 }
 
@@ -77,6 +87,7 @@ func (sp *SerialPort) Close() error {
 	if sp.portIsOpen {
 		sp.portIsOpen = false
 		close(sp.rxChar)
+		sp.log("Serial port %s closed", sp.name)
 		return sp.port.Close()
 	}
 	return nil
@@ -89,7 +100,7 @@ func (sp *SerialPort) Write(data []byte) (n int, err error) {
 		if err != nil {
 			// Do nothing
 		} else {
-			sp.log("Tx", string(data))
+			sp.log("Tx >> %s", string(data))
 		}
 	} else {
 		err = fmt.Errorf("Serial port is not open")
@@ -104,7 +115,7 @@ func (sp *SerialPort) Print(str string) error {
 		if err != nil {
 			return err
 		} else {
-			sp.log("Tx", str)
+			sp.log("Tx >> %s", str)
 		}
 	} else {
 		return fmt.Errorf("Serial port is not open")
@@ -136,11 +147,11 @@ func (sp *SerialPort) SendFile(filepath string) error {
 	// Read file
 	file, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		sp.log("DBG", "Invalid filepath")
+		sp.log("DBG >> %s", "Invalid filepath")
 		return err
 	} else {
 		fileSize := len(file)
-		sp.log("INF", "File size is %d bytes", fileSize)
+		sp.log("INF >> %s", "File size is %d bytes", fileSize)
 
 		for sentBytes <= fileSize {
 			//Try sending slices of less or equal than 512 bytes at time
@@ -152,7 +163,7 @@ func (sp *SerialPort) SendFile(filepath string) error {
 			// Write binaries
 			_, err := sp.port.Write(data)
 			if err != nil {
-				sp.log("DBG", "Error while sending the file")
+				sp.log("DBG >> %s", "Error while sending the file")
 				return err
 			} else {
 				sentBytes += q
@@ -205,7 +216,7 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 		//Timeout structure
 		c1 := make(chan string, 1)
 		go func() {
-			sp.log("INF", "Waiting for RegExp:\r\n\t%s\r\n", exp)
+			sp.log("INF >> Waiting for RegExp: \"%s\"", exp)
 			result := []string{}
 			for !timeExpired {
 				line, err := sp.ReadLine()
@@ -222,12 +233,12 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 		}()
 		select {
 		case data := <-c1:
-			format := "The RegExp: \r\n\t\t%s\r\n\tHas been matched: \r\n\t\t%s\r\n"
-			sp.log("INF", format, exp, data)
+			sp.log("INF >> The RegExp: \"%s\"", exp)
+			sp.log("INF >> Has been matched: \"%s\"", data)
 			return data, nil
 		case <-time.After(timeout):
 			timeExpired = true
-			sp.log("INF", "Unable to match RegExp:\r\n\t%s\r\n", exp)
+			sp.log("INF >> Unable to match RegExp: \"%s\"", exp)
 			return "", fmt.Errorf("Timeout expired")
 		}
 	} else {
@@ -274,7 +285,7 @@ func (sp *SerialPort) processSerialPort() {
 			switch lastRxByte {
 			case sp.eol:
 				// EOL - Print received data
-				sp.log("Rx", string(append(screenBuff, lastRxByte)))
+				sp.log("Rx << %s", string(append(screenBuff, lastRxByte)))
 				screenBuff = make([]byte, 0) //Clean buffer
 				break
 			default:
@@ -286,19 +297,10 @@ func (sp *SerialPort) processSerialPort() {
 	}
 }
 
-func (sp *SerialPort) log(dir, data string, extras ...interface{}) {
-	spacer := "-"
-	if dir == "Tx" {
-		spacer = ">>"
-	} else {
-		if dir == "Rx" {
-			spacer = "<<"
-		}
+func (sp *SerialPort) log(format string, a ...interface{}) {
+	if sp.Verbose {
+		sp.logger.Printf(format, a...)
 	}
-	if len(extras) > 0 {
-		data = fmt.Sprintf(data, extras...)
-	}
-	fmt.Printf("[%s] %s %s %s\r\n", sp.name, dir, spacer, data)
 }
 
 func removeEOL(line string) string {
