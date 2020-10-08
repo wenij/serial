@@ -206,7 +206,7 @@ func (sp *SerialPort) ReadLine() (string, error) {
 				return removeEOL(line), nil
 			}
 		case <-time.After(sp.readTimeout):
-			return "", nil
+			return sp.buff.String(), nil
 		}
 	} else {
 		return "", fmt.Errorf("Serial port is not open")
