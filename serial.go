@@ -30,6 +30,8 @@ type SerialPort struct {
 	logger        *log.Logger
 	portIsOpen    bool
 	Verbose       bool
+	waitline      chan struct{}
+	readTimeout   time.Duration
 	// openPort      func(port string, baud int) (io.ReadWriteCloser, error)
 }
 
@@ -47,7 +49,7 @@ func New() *SerialPort {
 	return &SerialPort{
 		logger:  log.New(multi, "PREFIX: ", log.Ldate|log.Ltime),
 		eol:     EOL_DEFAULT,
-		buff:    bytes.NewBuffer(make([]uint8, 256)),
+		buff:    bytes.NewBuffer(make([]uint8, 1024)),
 		Verbose: true,
 	}
 }
@@ -57,12 +59,13 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) erro
 	if sp.portIsOpen {
 		return fmt.Errorf("\"%s\" is already open", name)
 	}
-	var readTimeout time.Duration
+	//var readTimeout time.Duration
+	sp.readTimeout = time.Second * 1
 	if len(timeout) > 0 {
-		readTimeout = timeout[0]
+		sp.readTimeout = timeout[0]
 	}
 	// Open serial port
-	comPort, err := openPort(name, baud, readTimeout)
+	comPort, err := openPort(name, baud, sp.readTimeout)
 	if err != nil {
 		return fmt.Errorf("Unable to open port \"%s\" - %s", name, err)
 	}
@@ -74,6 +77,7 @@ func (sp *SerialPort) Open(name string, baud int, timeout ...time.Duration) erro
 	sp.buff.Reset()
 	// Open channels
 	sp.rxChar = make(chan byte)
+	sp.waitline = make(chan struct{})
 	// Enable threads
 	go sp.readSerialPort()
 	go sp.processSerialPort()
@@ -192,11 +196,17 @@ func (sp *SerialPort) Read() (byte, error) {
 // The text returned from ReadLine does not include the line end ("\r\n" or '\n').
 func (sp *SerialPort) ReadLine() (string, error) {
 	if sp.portIsOpen {
-		line, err := sp.buff.ReadString(sp.eol)
-		if err != nil {
-			return "", err
-		} else {
-			return removeEOL(line), nil
+		select {
+		case <-sp.waitline:
+			line, err := sp.buff.ReadString(sp.eol)
+			if err != nil {
+				fmt.Printf("ReadLine err!=%v\n", err)
+				return "", err
+			} else {
+				return removeEOL(line), nil
+			}
+		case <-time.After(sp.readTimeout):
+			return "", nil
 		}
 	} else {
 		return "", fmt.Errorf("Serial port is not open")
@@ -219,15 +229,19 @@ func (sp *SerialPort) WaitForRegexTimeout(exp string, timeout time.Duration) (st
 			sp.log("INF >> Waiting for RegExp: \"%s\"", exp)
 			result := []string{}
 			for !timeExpired {
+				//fmt.Printf("INF >> sp.Readline:\n")
 				line, err := sp.ReadLine()
+				//fmt.Printf("INF >> sp.Readline: \"%s\"\n", line)
 				if err != nil {
 					// Do nothing
 				} else {
+
 					result = regExpPatttern.FindAllString(line, -1)
 					if len(result) > 0 {
 						c1 <- result[0]
 						break
 					}
+					sp.log("INF >> not match: \"%s\"", line)
 				}
 			}
 		}()
@@ -267,11 +281,13 @@ func (sp *SerialPort) readSerialPort() {
 		n, _ := sp.port.Read(rxBuff)
 		// Write data to serial buffer
 		sp.buff.Write(rxBuff[:n])
+
 		for _, b := range rxBuff[:n] {
 			if sp.portIsOpen {
 				sp.rxChar <- b
 			}
 		}
+
 	}
 }
 
@@ -286,6 +302,7 @@ func (sp *SerialPort) processSerialPort() {
 			case sp.eol:
 				// EOL - Print received data
 				sp.log("Rx << %s", string(append(screenBuff, lastRxByte)))
+				sp.waitline <- struct{}{}
 				screenBuff = make([]byte, 0) //Clean buffer
 				break
 			default:
